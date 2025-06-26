@@ -17,6 +17,32 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// Helper function to check for duplicates
+async function isDuplicate(event) {
+  // Check for exact name match
+  const { data: exactMatch } = await supabase
+    .from('events')
+    .select('id')
+    .eq('name', event.name);
+
+  if (exactMatch && exactMatch.length > 0) {
+    return true;
+  }
+
+  // Check for location + date match (to catch different naming of same event)
+  const { data: locationMatch } = await supabase
+    .from('events')
+    .select('id')
+    .eq('location_name', event.location_name)
+    .eq('event_date', event.event_date);
+
+  if (locationMatch && locationMatch.length > 0) {
+    return true;
+  }
+
+  return false;
+}
+
 // Scrape endpoint - trigger scrapers manually
 app.get('/scrape', async (req, res) => {
   try {
@@ -34,19 +60,14 @@ app.get('/scrape', async (req, res) => {
       console.log('🔍 Scraping Twin Cities Family...');
       const tcfEvents = await scrapeTwinCitiesFamily();
       
-      // Save events to database
+      // Save events to database with improved duplicate checking
       let savedCount = 0;
       for (const event of tcfEvents) {
         try {
-          // Check if event already exists
-          const { data: existing } = await supabase
-            .from('events')
-            .select('id')
-            .eq('name', event.name)
-            .eq('source', event.source);
-
-          if (existing && existing.length > 0) {
-            console.log(`⏭️  Skipping duplicate: ${event.name}`);
+          const duplicate = await isDuplicate(event);
+          
+          if (duplicate) {
+            console.log(`⏭️  Skipping duplicate: ${event.name} (${event.location_name})`);
             continue;
           }
 
@@ -59,6 +80,7 @@ app.get('/scrape', async (req, res) => {
             console.error(`❌ Error saving ${event.name}:`, error.message);
           } else {
             savedCount++;
+            console.log(`✅ Saved: ${event.name} in ${event.location_name}`);
           }
         } catch (err) {
           console.error(`❌ Database error for ${event.name}:`, err.message);
@@ -79,19 +101,14 @@ app.get('/scrape', async (req, res) => {
       console.log('🔍 Scraping Fox9...');
       const fox9Events = await scrapeFox9();
       
-      // Save events to database
+      // Save events to database with improved duplicate checking
       let savedCount = 0;
       for (const event of fox9Events) {
         try {
-          // Check if event already exists
-          const { data: existing } = await supabase
-            .from('events')
-            .select('id')
-            .eq('name', event.name)
-            .eq('source', event.source);
-
-          if (existing && existing.length > 0) {
-            console.log(`⏭️  Skipping duplicate: ${event.name}`);
+          const duplicate = await isDuplicate(event);
+          
+          if (duplicate) {
+            console.log(`⏭️  Skipping duplicate: ${event.name} (${event.location_name})`);
             continue;
           }
 
@@ -104,6 +121,7 @@ app.get('/scrape', async (req, res) => {
             console.error(`❌ Error saving ${event.name}:`, error.message);
           } else {
             savedCount++;
+            console.log(`✅ Saved: ${event.name} in ${event.location_name}`);
           }
         } catch (err) {
           console.error(`❌ Database error for ${event.name}:`, err.message);
@@ -141,6 +159,92 @@ app.get('/scrape', async (req, res) => {
   }
 });
 
+// Cleanup duplicates endpoint
+app.get('/cleanup/duplicates', async (req, res) => {
+  try {
+    console.log('🧹 Starting duplicate cleanup...');
+    
+    // Get all events
+    const { data: allEvents, error: fetchError } = await supabase
+      .from('events')
+      .select('*')
+      .order('created_at', { ascending: true }); // Keep earliest created
+    
+    if (fetchError) throw fetchError;
+    
+    // Group by location_name and event_date to find duplicates
+    const eventGroups = {};
+    const duplicateIds = [];
+    
+    for (const event of allEvents) {
+      const key = `${event.location_name}-${event.event_date}`;
+      
+      if (!eventGroups[key]) {
+        eventGroups[key] = [];
+      }
+      eventGroups[key].push(event);
+    }
+    
+    // Find duplicates (keep the first one, mark others for deletion)
+    for (const [key, events] of Object.entries(eventGroups)) {
+      if (events.length > 1) {
+        console.log(`🔍 Found ${events.length} duplicates for ${key}`);
+        
+        // Keep the first event (earliest created), mark others for deletion
+        for (let i = 1; i < events.length; i++) {
+          duplicateIds.push(events[i].id);
+          console.log(`   -> Marking for deletion: ${events[i].name} (ID: ${events[i].id})`);
+        }
+      }
+    }
+    
+    let deletedCount = 0;
+    
+    // Delete duplicates in batches
+    if (duplicateIds.length > 0) {
+      console.log(`🗑️  Deleting ${duplicateIds.length} duplicate events...`);
+      
+      for (const id of duplicateIds) {
+        const { error: deleteError } = await supabase
+          .from('events')
+          .delete()
+          .eq('id', id);
+        
+        if (deleteError) {
+          console.error(`❌ Error deleting event ${id}:`, deleteError.message);
+        } else {
+          deletedCount++;
+        }
+      }
+    }
+    
+    // Get final count
+    const { data: finalEvents, error: finalError } = await supabase
+      .from('events')
+      .select('*', { count: 'exact' });
+    
+    if (finalError) throw finalError;
+    
+    res.json({
+      success: true,
+      message: `Cleanup completed! Removed ${deletedCount} duplicate events.`,
+      duplicatesFound: duplicateIds.length,
+      duplicatesDeleted: deletedCount,
+      totalEventsRemaining: finalEvents.length,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('💥 Cleanup failed:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Cleanup failed',
+      details: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 // Routes
 app.use('/api/events', eventsRoutes);
 app.use('/api/reports', reportsRoutes);
@@ -155,4 +259,5 @@ app.listen(PORT, () => {
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
   console.log(`🎆 Events API: http://localhost:${PORT}/api/events`);
   console.log(`🔧 Scrape endpoint: http://localhost:${PORT}/scrape`);
+  console.log(`🧹 Cleanup endpoint: http://localhost:${PORT}/cleanup/duplicates`);
 });
