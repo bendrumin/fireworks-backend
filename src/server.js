@@ -1,158 +1,111 @@
-const express = require('express');
-const cors = require('cors');
-require('dotenv').config();
+// Add this debug endpoint to your server.js
 
-const eventsRoutes = require('./routes/events');
-const reportsRoutes = require('./routes/reports');
-
-// Import scrapers
-const { scrapeTwinCitiesFamily, scrapeFox9 } = require('./scrapers/twinCitiesScraper');
-// Import supabase for saving events
-const supabase = require('./utils/supabase');
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// Scrape endpoint - trigger scrapers manually
-app.get('/scrape', async (req, res) => {
+app.get('/scrape/debug', async (req, res) => {
   try {
-    console.log('🚀 Starting scraping process...');
+    const axios = require('axios');
+    const cheerio = require('cheerio');
     
-    // Track results
-    let totalScraped = 0;
-    const results = {
-      twinCitiesFamily: { success: false, count: 0, error: null },
-      fox9: { success: false, count: 0, error: null }
+    console.log('🔍 Debug: Checking website content...');
+    
+    const debugResults = {
+      twinCitiesFamily: { status: 'checking...', elements: [] },
+      fox9: { status: 'checking...', elements: [] }
     };
 
-    // Scrape Twin Cities Family
+    // Debug Twin Cities Family
     try {
-      console.log('🔍 Scraping Twin Cities Family...');
-      const tcfEvents = await scrapeTwinCitiesFamily();
-      
-      // Save events to database
-      let savedCount = 0;
-      for (const event of tcfEvents) {
-        try {
-          // Check if event already exists
-          const { data: existing } = await supabase
-            .from('events')
-            .select('id')
-            .eq('name', event.name)
-            .eq('source', event.source);
-
-          if (existing && existing.length > 0) {
-            console.log(`⏭️  Skipping duplicate: ${event.name}`);
-            continue;
-          }
-
-          // Insert new event
-          const { error } = await supabase
-            .from('events')
-            .insert([event]);
-
-          if (error) {
-            console.error(`❌ Error saving ${event.name}:`, error.message);
-          } else {
-            savedCount++;
-          }
-        } catch (err) {
-          console.error(`❌ Database error for ${event.name}:`, err.message);
+      const response = await axios.get('https://twincitiesfamily.com/4th-of-july-events-fireworks/', {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
         }
-      }
+      });
+
+      const $ = cheerio.load(response.data);
       
-      results.twinCitiesFamily.success = true;
-      results.twinCitiesFamily.count = savedCount;
-      totalScraped += savedCount;
-      console.log(`✅ Twin Cities Family: ${tcfEvents.length} events scraped, ${savedCount} saved`);
+      debugResults.twinCitiesFamily.status = 'success';
+      debugResults.twinCitiesFamily.pageTitle = $('title').text();
+      debugResults.twinCitiesFamily.pageLength = response.data.length;
+      
+      // Check what elements exist
+      debugResults.twinCitiesFamily.h3Count = $('h3').length;
+      debugResults.twinCitiesFamily.h4Count = $('h4').length;
+      debugResults.twinCitiesFamily.eventTitleCount = $('.event-title').length;
+      debugResults.twinCitiesFamily.entryTitleCount = $('.entry-title').length;
+      
+      // Get sample text from headers
+      const sampleHeaders = [];
+      $('h1, h2, h3, h4, h5').each((i, el) => {
+        if (i < 10) { // First 10 headers
+          sampleHeaders.push($(el).text().trim());
+        }
+      });
+      debugResults.twinCitiesFamily.sampleHeaders = sampleHeaders;
+      
+      // Look for July/fireworks mentions
+      const pageText = $('body').text().toLowerCase();
+      debugResults.twinCitiesFamily.hasJuly = pageText.includes('july');
+      debugResults.twinCitiesFamily.hasFireworks = pageText.includes('firework');
+      debugResults.twinCitiesFamily.has4th = pageText.includes('4th');
+
     } catch (error) {
-      console.error('❌ Twin Cities Family scraper failed:', error.message);
-      results.twinCitiesFamily.error = error.message;
+      debugResults.twinCitiesFamily.status = 'error';
+      debugResults.twinCitiesFamily.error = error.message;
     }
 
-    // Scrape Fox9
+    // Debug Fox9
     try {
-      console.log('🔍 Scraping Fox9...');
-      const fox9Events = await scrapeFox9();
-      
-      // Save events to database
-      let savedCount = 0;
-      for (const event of fox9Events) {
-        try {
-          // Check if event already exists
-          const { data: existing } = await supabase
-            .from('events')
-            .select('id')
-            .eq('name', event.name)
-            .eq('source', event.source);
-
-          if (existing && existing.length > 0) {
-            console.log(`⏭️  Skipping duplicate: ${event.name}`);
-            continue;
-          }
-
-          // Insert new event
-          const { error } = await supabase
-            .from('events')
-            .insert([event]);
-
-          if (error) {
-            console.error(`❌ Error saving ${event.name}:`, error.message);
-          } else {
-            savedCount++;
-          }
-        } catch (err) {
-          console.error(`❌ Database error for ${event.name}:`, err.message);
+      const response = await axios.get('https://www.fox9.com/news/july-4th-fireworks-minnesota-2025-list', {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
         }
-      }
+      });
+
+      const $ = cheerio.load(response.data);
       
-      results.fox9.success = true;
-      results.fox9.count = savedCount;
-      totalScraped += savedCount;
-      console.log(`✅ Fox9: ${fox9Events.length} events scraped, ${savedCount} saved`);
+      debugResults.fox9.status = 'success';
+      debugResults.fox9.pageTitle = $('title').text();
+      debugResults.fox9.pageLength = response.data.length;
+      
+      // Check what elements exist
+      debugResults.fox9.pCount = $('p').length;
+      debugResults.fox9.liCount = $('li').length;
+      debugResults.fox9.richTextCount = $('.rich-text p').length;
+      
+      // Get sample paragraphs
+      const sampleParagraphs = [];
+      $('p').each((i, el) => {
+        if (i < 5) { // First 5 paragraphs
+          const text = $(el).text().trim();
+          if (text.length > 20 && text.length < 200) {
+            sampleParagraphs.push(text);
+          }
+        }
+      });
+      debugResults.fox9.sampleParagraphs = sampleParagraphs;
+      
+      // Look for content mentions
+      const pageText = $('body').text().toLowerCase();
+      debugResults.fox9.hasJuly = pageText.includes('july');
+      debugResults.fox9.hasFireworks = pageText.includes('firework');
+      debugResults.fox9.has2025 = pageText.includes('2025');
+      debugResults.fox9.hasMinnesota = pageText.includes('minnesota');
+
     } catch (error) {
-      console.error('❌ Fox9 scraper failed:', error.message);
-      results.fox9.error = error.message;
+      debugResults.fox9.status = 'error';
+      debugResults.fox9.error = error.message;
     }
 
-    console.log(`🎉 Scraping complete! Total events saved: ${totalScraped}`);
-
-    // Return detailed results
     res.json({
-      success: true,
-      message: `Scraping completed! ${totalScraped} total events saved to database.`,
-      totalEventsSaved: totalScraped,
-      scrapers: results,
+      message: 'Debug information for scrapers',
+      results: debugResults,
       timestamp: new Date().toISOString()
     });
 
   } catch (error) {
-    console.error('💥 Scraping process failed:', error);
+    console.error('Debug endpoint failed:', error);
     res.status(500).json({
-      success: false,
-      error: 'Scraping process failed',
-      details: error.message,
-      timestamp: new Date().toISOString()
+      error: 'Debug failed',
+      details: error.message
     });
   }
-});
-
-// Routes
-app.use('/api/events', eventsRoutes);
-app.use('/api/reports', reportsRoutes);
-
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
-});
-
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health`);
-  console.log(`🎆 Events API: http://localhost:${PORT}/api/events`);
-  console.log(`🔧 Scrape endpoint: http://localhost:${PORT}/scrape`);
 });
