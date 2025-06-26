@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../utils/supabase');
 
-// Get all events
+// Get all events (verified only - original endpoint)
 router.get('/', async (req, res) => {
   try {
     const { lat, lng, radius = 50 } = req.query;
@@ -38,6 +38,67 @@ router.get('/', async (req, res) => {
   } catch (error) {
     console.error('Error fetching events:', error);
     res.status(500).json({ error: 'Failed to fetch events' });
+  }
+});
+
+// Get ALL events (including unverified) - for testing and admin
+router.get('/all', async (req, res) => {
+  try {
+    const { lat, lng, radius = 50 } = req.query;
+    
+    let query = supabase
+      .from('events')
+      .select('*')
+      .order('event_date', { ascending: true });
+
+    const { data, error } = await query;
+    
+    if (error) throw error;
+    
+    // Calculate distances if user location provided
+    if (lat && lng) {
+      const eventsWithDistance = data.map(event => ({
+        ...event,
+        distance: calculateDistance(
+          parseFloat(lat), 
+          parseFloat(lng), 
+          event.lat, 
+          event.lng
+        )
+      }));
+      
+      res.json(eventsWithDistance);
+    } else {
+      res.json(data);
+    }
+  } catch (error) {
+    console.error('Error fetching all events:', error);
+    res.status(500).json({ error: 'Failed to fetch all events' });
+  }
+});
+
+// Get events by verification status
+router.get('/by-status', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('events')
+      .select('*')
+      .order('verified', { ascending: false })
+      .order('event_date', { ascending: true });
+    
+    if (error) throw error;
+    
+    const stats = {
+      verified: data.filter(e => e.verified).length,
+      unverified: data.filter(e => !e.verified).length,
+      total: data.length,
+      sources: [...new Set(data.map(e => e.source))]
+    };
+    
+    res.json({ events: data, stats });
+  } catch (error) {
+    console.error('Error fetching events by status:', error);
+    res.status(500).json({ error: 'Failed to fetch events by status' });
   }
 });
 
