@@ -6,7 +6,7 @@ const eventsRoutes = require('./routes/events');
 const reportsRoutes = require('./routes/reports');
 
 // Import scrapers
-const { scrapeTwinCitiesFamily, scrapeFox9 } = require('./scrapers/twinCitiesFamily');
+const { scrapeTwinCitiesFamily, scrapeFox9 } = require('./scrapers/twinCitiesScraper');
 // Import supabase for saving events
 const supabase = require('./utils/supabase');
 
