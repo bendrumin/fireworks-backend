@@ -1,12 +1,15 @@
+// Updated scrapers that work with the actual website structures
+
 const axios = require('axios');
 const cheerio = require('cheerio');
 const supabase = require('../utils/supabase');
 
 async function scrapeTwinCitiesFamily() {
   try {
-    console.log('🕷️ Scraping Twin Cities Family...');
+    console.log('🕷️ Scraping Family Fun Twin Cities...');
     
-    const response = await axios.get('https://twincitiesfamily.com/4th-of-july-events-fireworks/', {
+    // Correct URL
+    const response = await axios.get('https://www.familyfuntwincities.com/twin-cities-independence-day-activities/', {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
       }
@@ -15,126 +18,94 @@ async function scrapeTwinCitiesFamily() {
     const $ = cheerio.load(response.data);
     const events = [];
 
-    // Look for common event patterns
-    $('h3, h4, .event-title, .entry-title').each((i, element) => {
-      const title = $(element).text().trim();
+    // Look for location patterns - this site uses specific formats
+    const text = $('body').text();
+    
+    // Extract events using common patterns from the content
+    const locations = [
+      'COLUMBIA HEIGHTS', 'HAM LAKE', 'DULUTH', 'WOODBURY', 'CHANHASSEN', 
+      'EDEN PRAIRIE', 'EDINA', 'BLAINE', 'MINNEAPOLIS', 'ST. PAUL',
+      'BLOOMINGTON', 'PLYMOUTH', 'BURNSVILLE', 'EAGAN', 'MINNETONKA',
+      'LAKEVILLE', 'MAPLE GROVE', 'BROOKLYN PARK', 'STILLWATER', 'ANOKA',
+      'ST LOUIS PARK', 'RICHFIELD', 'EXCELSIOR', 'SHAKOPEE'
+    ];
+
+    // Find paragraphs that mention these locations with fireworks
+    $('p, div').each((i, element) => {
+      const elementText = $(element).text().trim();
       
-      // Skip if doesn't seem like a fireworks event
-      if (!title.toLowerCase().includes('firework') && 
-          !title.toLowerCase().includes('july') && 
-          !title.toLowerCase().includes('4th')) {
-        return;
+      if (elementText.length < 50 || elementText.length > 1000) return;
+      
+      // Must mention fireworks or celebration
+      if (!elementText.toLowerCase().match(/(firework|celebration|july|4th)/)) return;
+      
+      let foundLocation = '';
+      for (const location of locations) {
+        if (elementText.toUpperCase().includes(location)) {
+          foundLocation = location;
+          break;
+        }
       }
-
-      let description = '';
-      let location = '';
-      let date = '2025-07-04'; // Default to July 4th
+      
+      if (!foundLocation) return;
+      
+      // Extract time
       let time = 'Evening';
-
-      // Get surrounding text for context
-      const nextElements = $(element).nextAll().slice(0, 3);
-      nextElements.each((j, nextEl) => {
-        const text = $(nextEl).text().trim();
-        if (text.length > 20) {
-          description += text + ' ';
-        }
-        
-        // Look for location indicators
-        if (text.toLowerCase().includes('park') || 
-            text.toLowerCase().includes('lake') ||
-            text.toLowerCase().includes('downtown')) {
-          location = text;
-        }
-        
-        // Look for time
-        if (text.match(/\d{1,2}:\d{2}/)) {
-          time = text.match(/\d{1,2}:\d{2}[^\s]*/)?.[0] || time;
-        }
-      });
-
-      // Extract location from title if not found
-      if (!location && title.includes(' - ')) {
-        location = title.split(' - ')[1];
-      } else if (!location && title.includes(' at ')) {
-        location = title.split(' at ')[1];
+      const timeMatch = elementText.match(/(\d{1,2}:\d{2}\s*[ap]m?|\d{1,2}\s*[ap]m|dusk|evening)/i);
+      if (timeMatch) {
+        time = timeMatch[0];
       }
-
+      
+      // Extract date - look for July 3, 4, 5, etc.
+      let date = '2025-07-04'; // Default
+      const dateMatch = elementText.match(/july\s*(\d{1,2})/i);
+      if (dateMatch) {
+        const day = dateMatch[1].padStart(2, '0');
+        date = `2025-07-${day}`;
+      }
+      
+      // Create event name
+      const locationName = foundLocation.toLowerCase()
+        .split(' ')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+      
+      let eventName = `${locationName} Independence Day Fireworks`;
+      if (elementText.toLowerCase().includes('celebration')) {
+        eventName = `${locationName} July 4th Celebration`;
+      }
+      
+      // Get coordinates
+      const coordinates = getCityCoordinates(locationName);
+      
       events.push({
-        name: title,
-        location_name: location || 'Twin Cities Area',
-        lat: 44.9778, // Default Minneapolis coordinates
-        lng: -93.2650,
+        name: eventName,
+        location_name: locationName,
+        lat: coordinates.lat,
+        lng: coordinates.lng,
         event_date: date,
         event_time: time,
-        cost: 'Check event details',
-        source: 'twincitiesfamily.com',
+        cost: 'Free',
+        source: 'familyfuntwincities.com',
         verified: false,
-        description: description.trim().substring(0, 500)
+        description: elementText.substring(0, 400)
       });
     });
 
-    console.log(`📅 Found ${events.length} potential events`);
-    return events;
+    // Remove duplicates by location
+    const uniqueEvents = events.filter((event, index, self) => 
+      index === self.findIndex(e => e.location_name === event.location_name)
+    );
+
+    console.log(`📅 Found ${uniqueEvents.length} Family Fun Twin Cities events`);
+    return uniqueEvents;
 
   } catch (error) {
-    console.error('❌ Scraping error:', error.message);
+    console.error('❌ Family Fun Twin Cities scraping error:', error.message);
     return [];
   }
 }
 
-async function saveEventsToDatabase(events) {
-  let savedCount = 0;
-  
-  for (const event of events) {
-    try {
-      // Check if event already exists
-      const { data: existing } = await supabase
-        .from('events')
-        .select('id')
-        .eq('name', event.name)
-        .eq('source', event.source);
-
-      if (existing && existing.length > 0) {
-        console.log(`⏭️  Skipping duplicate: ${event.name}`);
-        continue;
-      }
-
-      // Insert new event
-      const { error } = await supabase
-        .from('events')
-        .insert([event]);
-
-      if (error) {
-        console.error(`❌ Error saving ${event.name}:`, error.message);
-      } else {
-        console.log(`✅ Saved: ${event.name}`);
-        savedCount++;
-      }
-    } catch (err) {
-      console.error(`❌ Database error for ${event.name}:`, err.message);
-    }
-  }
-
-  return savedCount;
-}
-
-async function runScraper() {
-  console.log('🚀 Starting multi-site scraper...');
-  
-  // Scrape both sites
-  const twinCitiesEvents = await scrapeTwinCitiesFamily();
-  const fox9Events = await scrapeFox9();
-  
-  // Combine all events
-  const allEvents = [...twinCitiesEvents, ...fox9Events];
-  
-  if (allEvents.length > 0) {
-    const savedCount = await saveEventsToDatabase(allEvents);
-    console.log(`✨ Scraper complete! Saved ${savedCount} new events from ${allEvents.length} found`);
-  } else {
-    console.log('📭 No events found from any source');
-  }
-}
 async function scrapeFox9() {
   try {
     console.log('🦊 Scraping Fox9...');
@@ -148,81 +119,76 @@ async function scrapeFox9() {
     const $ = cheerio.load(response.data);
     const events = [];
 
-    // Fox9 often uses article text with city names and events
-    $('p, li, .rich-text p').each((i, element) => {
-      const text = $(element).text().trim();
+    // Fox9 has a structured list format - look for city headers followed by descriptions
+    const articleText = $('body').text();
+    const lines = articleText.split('\n');
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
       
-      // Look for lines that mention cities and fireworks
-      if (text.length < 20 || text.length > 300) return;
+      // Skip short lines
+      if (line.length < 5) continue;
       
-      // Must mention fireworks or July 4th related terms
-      if (!text.toLowerCase().match(/(firework|july|4th|celebration|display)/)) return;
-      
-      // Extract city/location names (common Minnesota cities)
-      const cities = [
-        'Minneapolis', 'St. Paul', 'Bloomington', 'Plymouth', 'Duluth',
-        'Rochester', 'Mankato', 'St. Cloud', 'Moorhead', 'Burnsville',
-        'Eagan', 'Eden Prairie', 'Minnetonka', 'Edina', 'Lakeville',
-        'Woodbury', 'Maple Grove', 'Brooklyn Park', 'Stillwater', 'Anoka'
+      // Look for city names (they appear as headers)
+      const cityNames = [
+        'Albert Lea', 'Austin', 'Bemidji', 'Bloomington', 'Cannon Falls',
+        'Coon Rapids', 'Crosby', 'Crosslake', 'Delano', 'Detroit Lakes',
+        'Duluth', 'Eagan', 'Edina', 'Excelsior', 'Ely', 'Eveleth',
+        'Lake City', 'Mankato', 'Minneapolis', 'Nisswa', 'Pequot Lakes',
+        'Richfield', 'Shakopee', 'Spicer', 'St. Louis Park', 'Tofte',
+        'Waconia', 'Warroad'
       ];
       
       let foundCity = '';
-      for (const city of cities) {
-        if (text.toLowerCase().includes(city.toLowerCase())) {
+      for (const city of cityNames) {
+        if (line.trim() === city) {
           foundCity = city;
           break;
         }
       }
       
-      if (!foundCity) return;
-      
-      // Extract time if mentioned
-      let time = 'Evening';
-      const timeMatch = text.match(/(\d{1,2}:\d{2}\s*[ap]m?|\d{1,2}\s*[ap]m)/i);
-      if (timeMatch) {
-        time = timeMatch[0];
+      if (foundCity && i + 1 < lines.length) {
+        const description = lines[i + 1].trim();
+        
+        if (description.length > 20) {
+          // Extract time
+          let time = 'Evening';
+          const timeMatch = description.match(/(\d{1,2}:\d{2}\s*[ap]\.?m\.?|\d{1,2}\s*[ap]\.?m\.?|dusk|nightfall)/i);
+          if (timeMatch) {
+            time = timeMatch[0];
+          }
+          
+          // Extract date
+          let date = '2025-07-04';
+          if (description.toLowerCase().includes('july 3')) {
+            date = '2025-07-03';
+          } else if (description.toLowerCase().includes('july 5')) {
+            date = '2025-07-05';
+          } else if (description.toLowerCase().includes('july 6')) {
+            date = '2025-07-06';
+          }
+          
+          // Get coordinates
+          const coordinates = getCityCoordinates(foundCity);
+          
+          events.push({
+            name: `${foundCity} July 4th Fireworks`,
+            location_name: foundCity,
+            lat: coordinates.lat,
+            lng: coordinates.lng,
+            event_date: date,
+            event_time: time,
+            cost: 'Check local details',
+            source: 'fox9.com',
+            verified: false,
+            description: description.substring(0, 300)
+          });
+        }
       }
-      
-      // Look for date (default to July 4th)
-      let date = '2025-07-04';
-      const dateMatch = text.match(/july\s*(\d{1,2})/i);
-      if (dateMatch) {
-        const day = dateMatch[1].padStart(2, '0');
-        date = `2025-07-${day}`;
-      }
-      
-      // Create event name
-      let eventName = `${foundCity} Fireworks`;
-      if (text.toLowerCase().includes('festival')) {
-        eventName = `${foundCity} Festival Fireworks`;
-      } else if (text.toLowerCase().includes('celebration')) {
-        eventName = `${foundCity} July 4th Celebration`;
-      }
-      
-      // Get approximate coordinates for Minnesota cities
-      const coordinates = getCityCoordinates(foundCity);
-      
-      events.push({
-        name: eventName,
-        location_name: foundCity,
-        lat: coordinates.lat,
-        lng: coordinates.lng,
-        event_date: date,
-        event_time: time,
-        cost: 'Check local details',
-        source: 'fox9.com',
-        verified: false,
-        description: text.substring(0, 300)
-      });
-    });
+    }
 
-    // Remove duplicates by name
-    const uniqueEvents = events.filter((event, index, self) => 
-      index === self.findIndex(e => e.name === event.name)
-    );
-
-    console.log(`📺 Found ${uniqueEvents.length} Fox9 events`);
-    return uniqueEvents;
+    console.log(`📺 Found ${events.length} Fox9 events`);
+    return events;
 
   } catch (error) {
     console.error('❌ Fox9 scraping error:', error.message);
@@ -230,7 +196,7 @@ async function scrapeFox9() {
   }
 }
 
-// Helper function for city coordinates
+// Helper function for city coordinates (expanded)
 function getCityCoordinates(city) {
   const cityCoords = {
     'Minneapolis': { lat: 44.9778, lng: -93.2650 },
@@ -252,10 +218,29 @@ function getCityCoordinates(city) {
     'Maple Grove': { lat: 45.0724, lng: -93.4558 },
     'Brooklyn Park': { lat: 45.0941, lng: -93.3563 },
     'Stillwater': { lat: 45.0566, lng: -92.8065 },
-    'Anoka': { lat: 45.1972, lng: -93.3866 }
+    'Anoka': { lat: 45.1972, lng: -93.3866 },
+    'Chanhassen': { lat: 44.8619, lng: -93.5272 },
+    'Columbia Heights': { lat: 45.0411, lng: -93.2630 },
+    'Ham Lake': { lat: 45.2469, lng: -93.2077 },
+    'Blaine': { lat: 45.1607, lng: -93.2349 },
+    'St Louis Park': { lat: 44.9481, lng: -93.3478 },
+    'Richfield': { lat: 44.8831, lng: -93.2830 },
+    'Excelsior': { lat: 44.9022, lng: -93.5647 },
+    'Shakopee': { lat: 44.7973, lng: -93.5272 },
+    'Albert Lea': { lat: 43.6481, lng: -93.3687 },
+    'Austin': { lat: 43.6666, lng: -92.9735 },
+    'Bemidji': { lat: 47.4737, lng: -94.8803 },
+    'Cannon Falls': { lat: 44.5094, lng: -92.9054 },
+    'Coon Rapids': { lat: 45.1732, lng: -93.3030 },
+    'Delano': { lat: 45.0424, lng: -93.7888 },
+    'Detroit Lakes': { lat: 46.8171, lng: -95.8453 },
+    'Ely': { lat: 47.9032, lng: -91.8673 },
+    'Eveleth': { lat: 47.4624, lng: -92.5407 },
+    'Lake City': { lat: 44.4497, lng: -92.2685 },
+    'Nisswa': { lat: 46.5199, lng: -94.2886 }
   };
   
   return cityCoords[city] || { lat: 44.9778, lng: -93.2650 }; // Default to Minneapolis
 }
 
-module.exports = { runScraper, scrapeTwinCitiesFamily, scrapeFox9 };
+module.exports = { scrapeTwinCitiesFamily, scrapeFox9 };
